@@ -12,8 +12,6 @@
 #include <audioclient.h>
 
 #include <assert.h>
-#define _USE_MATH_DEFINES
-#include <math.h> // for sin()
 #include <stdint.h>
 
 // Struct to get data from loaded WAV file.
@@ -76,7 +74,6 @@ void Win32FreeFileData(void *data)
 int main()
 {
     const char* wavFilename = "Flowing-Water.wav";
-    // const char* wavFilename = "Engine-Noise.wav";
     void* fileBytes;
     uint32_t fileSize;
     bool result = win32LoadEntireFile(wavFilename, &fileBytes, &fileSize);
@@ -98,7 +95,7 @@ int main()
     assert(wav->blockAlign == wav->numChannels * wav->bitsPerSample/8);
     assert(wav->byteRate == wav->sampleRate * wav->blockAlign);
 
-    uint32_t numWavSamples = wav->dataChunkSize / (wav->numChannels * sizeof(uint16_t));
+    uint32_t numWavSamples = wav->dataChunkSize / sizeof(uint16_t);
     uint16_t* wavSamples = wav->samples;
 
     HRESULT hr = CoInitializeEx(nullptr, COINIT_SPEED_OVER_MEMORY);
@@ -132,8 +129,9 @@ int main()
     mixFormat.nBlockAlign = (mixFormat.nChannels * mixFormat.wBitsPerSample) / 8;
     mixFormat.nAvgBytesPerSec = mixFormat.nSamplesPerSec * mixFormat.nBlockAlign;
 
+    const float BUFFER_SIZE_IN_SECONDS = 2.0f;
     const int64_t REFTIMES_PER_SEC = 10000000; // hundred nanoseconds
-    REFERENCE_TIME requestedSoundBufferDuration = REFTIMES_PER_SEC * 2;
+    REFERENCE_TIME requestedSoundBufferDuration = (REFERENCE_TIME)(REFTIMES_PER_SEC * BUFFER_SIZE_IN_SECONDS);
     DWORD initStreamFlags = ( AUDCLNT_STREAMFLAGS_RATEADJUST 
                             | AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM
                             | AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY );
@@ -154,10 +152,7 @@ int main()
     hr = audioClient->Start();
     assert(hr == S_OK);
 
-    double playbackTime = 0.0;
-    const float TONE_HZ = 440;
-    const int16_t TONE_VOLUME = 3000;
-    uint32_t wavPlaybackSample = 0;
+    int wavPlaybackSample = 0;
     while (true)
     {
         // Padding is how much valid data is queued up in the sound buffer
@@ -166,14 +161,15 @@ int main()
         hr = audioClient->GetCurrentPadding(&bufferPadding);
         assert(hr == S_OK);
 
-        // How much of our sound buffer we want to fill on each update.
+        // How much padding we want our sound buffer to have after writing to it.
         // Needs to be enough so that the playback doesn't reach garbage data
-        // but we get less latency the lower it is (e.g. how long does it take
+        // but we get less latency the lower it is (i.e. how long does it take
         // between pressing jump and hearing the sound effect)
-        // Try setting this to e.g. bufferSizeInFrames / 250 to hear what happens when
+        // Try setting this to e.g. 1/250.f to hear what happens when
         // we're not writing enough data to stay ahead of playback!
-        UINT32 soundBufferLatency = bufferSizeInFrames / 50;
-        UINT32 numFramesToWrite = soundBufferLatency - bufferPadding;
+        const float TARGET_BUFFER_PADDING_IN_SECONDS = 1/60.f;
+        UINT32 targetBufferPadding = UINT32(bufferSizeInFrames * TARGET_BUFFER_PADDING_IN_SECONDS);
+        UINT32 numFramesToWrite = targetBufferPadding - bufferPadding;
 
         int16_t* buffer;
         hr = audioRenderClient->GetBuffer(numFramesToWrite, (BYTE**)(&buffer));
@@ -181,16 +177,9 @@ int main()
 
         for (UINT32 frameIndex = 0; frameIndex < numFramesToWrite; ++frameIndex)
         {
-            uint32_t leftSampleIndex = wav->numChannels*wavPlaybackSample;
-            uint32_t rightSampleIndex = leftSampleIndex + wav->numChannels - 1;
-            uint16_t leftSample = wav->samples[leftSampleIndex];
-            uint16_t rightSample = wav->samples[rightSampleIndex];
-            ++wavPlaybackSample;
-            *buffer++ = leftSample;
-            *buffer++ = rightSample;
-
-            if(wavPlaybackSample >= numWavSamples)
-                wavPlaybackSample -= numWavSamples;
+            *buffer++ = wavSamples[wavPlaybackSample++]; // left
+            *buffer++ = wavSamples[wavPlaybackSample++]; // right
+            wavPlaybackSample %= numWavSamples; // Loop if we reach end of wav file
         }
         hr = audioRenderClient->ReleaseBuffer(numFramesToWrite, 0);
         assert(hr == S_OK);
@@ -204,8 +193,8 @@ int main()
         audioClock->GetFrequency(&audioPlaybackFreq);
         audioClock->GetPosition(&audioPlaybackPos, 0);
         audioClock->Release();
-        UINT64 audioPlaybackPosInSeconds = audioPlaybackPos/audioPlaybackFreq;
-        UINT64 audioPlaybackPosInSamples = audioPlaybackPosInSeconds*mixFormat.nSamplesPerSec;
+        // UINT64 audioPlaybackPosInSeconds = audioPlaybackPos/audioPlaybackFreq;
+        // UINT64 audioPlaybackPosInSamples = audioPlaybackPosInSeconds*mixFormat.nSamplesPerSec;
     }
 
     audioClient->Stop();
