@@ -1,16 +1,23 @@
 @echo off
 
-set COMPILER_FLAGS=/MTd /nologo /Gm- /EHa- /GR- /fp:fast /Od /Oi /W4 /wd4201 /wd4100 /wd4189 /wd4514 /wd4820 /wd4505 /FC /Fm /Z7
+set COMMON_COMPILER_FLAGS=/nologo /EHsc- /GR- /Oi /W4 /Fm /FC
+
+set DEBUG_FLAGS=/DDEBUG_BUILD /DDEBUG /Od /MTd /Zi
+set RELEASE_FLAGS =/O2 /DNDEBUG
+
+set COMPILER_FLAGS=%COMMON_COMPILER_FLAGS% %DEBUG_FLAGS%
+REM set COMPILER_FLAGS=%COMMON_COMPILER_FLAGS% %RELEASE_FLAGS%
+
+set SRC_FILES=../main.cpp ../LoadWavFile.cpp ../Win32LoadEntireFile.cpp
 
 set LINKER_FLAGS=/INCREMENTAL:NO /opt:ref
 set SYSTEM_LIBS=ole32.lib
-REM user32.lib gdi32.lib winmm.lib
 
 set BUILD_DIR=".\build"
 if not exist %BUILD_DIR% mkdir %BUILD_DIR%
 pushd %BUILD_DIR%
 
-cl %COMPILER_FLAGS% ../main.cpp /link %LINKER_FLAGS% %SYSTEM_LIBS%
-
+echo Building...
+cl %COMPILER_FLAGS% %SRC_FILES% /link %LINKER_FLAGS% %SYSTEM_LIBS%
 popd
 echo Done
