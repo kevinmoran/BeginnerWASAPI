@@ -7,9 +7,13 @@
             "label": "build",
             "type": "shell",
             "command": "./build.bat",
+            "problemMatcher": "$msCompile",
             "group": {
                 "kind": "build",
                 "isDefault": true
+            },
+            "presentation": {
+                "clear": true
             }
         }
     ]

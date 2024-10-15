@@ -1,6 +1,7 @@
 
 // Simple example code to load a Wav file and play it with WASAPI
-// with pitch-shifting, i.e. playback at different speeds.
+// This example implements resampling of the wav data to support
+// different sample rates and to allow playback at different speeds
 
 #include <windows.h>
 #include <mmdeviceapi.h>
@@ -9,62 +10,8 @@
 #include <assert.h>
 #include <stdint.h>
 
-// Struct to get data from loaded WAV file.
-// NB: This will only work for WAV files containing PCM (non-compressed) data
-// otherwise the layout will be different.
-#pragma warning(disable : 4200) // zero-sized array in struct/union
-struct WavFile {
-    // RIFF Chunk
-    uint32_t riffId;
-    uint32_t riffChunkSize;
-    uint32_t waveId;
-
-    // fmt Chunk
-    uint32_t fmtId;
-    uint32_t fmtChunkSize;
-    uint16_t formatCode;
-    uint16_t numChannels;
-    uint32_t sampleRate;
-    uint32_t byteRate;
-    uint16_t blockAlign;
-    uint16_t bitsPerSample;
-    // These are not present for PCM Wav Files
-    // uint16_t cbSize;
-    // uint16_t wValidBitsPerSample;
-    // uint32_t dwChannelMask;
-    // char subFormatGUID[16];
-
-    // data Chunk
-    uint32_t dataId;
-    uint32_t dataChunkSize;
-    uint16_t samples[]; // actual samples start here
-};
-#pragma warning(default : 4200)
-
-bool win32LoadEntireFile(const char* filename, void** data, uint32_t* numBytesRead)
-{    
-    HANDLE file = CreateFileA(filename, GENERIC_READ, 0, 0, OPEN_EXISTING, 0, 0);  
-    if((file == INVALID_HANDLE_VALUE)) return false;
-    
-    DWORD fileSize = GetFileSize(file, 0);
-    if(!fileSize) return false;
-    
-    *data = HeapAlloc(GetProcessHeap(), 0, fileSize+1);
-    if(!*data) return false;
-
-    if(!ReadFile(file, *data, fileSize, (LPDWORD)numBytesRead, 0))
-        return false;
-    
-    CloseHandle(file);
-    ((uint8_t*)*data)[fileSize] = 0;
-    
-    return true;
-}
-
-void Win32FreeFileData(void *data)
-{
-    HeapFree(GetProcessHeap(), 0, data);
-}
+#include "LoadWavFile.h"
+#include "Win32LoadEntireFile.h"
 
 inline float lerp(float a, float b, float t){
     return a + (b-a)*t;
@@ -72,30 +19,15 @@ inline float lerp(float a, float b, float t){
 
 int main()
 {
-    const char* wavFilename = "Flowing-Water.wav";
+    const char* wavFilename = "Testing48kHz.wav";
     void* fileBytes;
     uint32_t fileSize;
-    bool loadedWavSuccessfully = win32LoadEntireFile(wavFilename, &fileBytes, &fileSize);
-    assert(loadedWavSuccessfully);
+    bool result = win32LoadEntireFile(wavFilename, &fileBytes, &fileSize);
+    assert(result);
 
-    WavFile* wav = (WavFile*)fileBytes;
-    // Check the Chunk IDs to make sure we loaded the file correctly
-    assert(wav->riffId == 1179011410);
-    assert(wav->waveId == 1163280727);
-    assert(wav->fmtId == 544501094);
-    assert(wav->dataId == 1635017060);
-    // Check data is in format we expect
-    assert(wav->formatCode == 1); // Only support PCM data
-    assert(wav->numChannels == 1 || wav->numChannels == 2); // Only support 1- or 2-channel data
-    assert(wav->fmtChunkSize == 16); // This should be true for PCM data
-    assert(wav->bitsPerSample == 16); // Only support 16-bit samples
-    // This is how these fields are defined, no harm to assert that they're what we expect
-    // assert(wav->blockAlign == wav->numChannels * wav->bitsPerSample/8);
-    assert(wav->blockAlign == wav->numChannels * 2); // bitsPerSample is always 16
-    assert(wav->byteRate == wav->sampleRate * wav->blockAlign);
-
-    uint32_t numWavSamples = wav->dataChunkSize / sizeof(uint16_t);
-    uint32_t numWavFrames = numWavSamples / wav->numChannels;
+    AudioClip clip = parseWavFile((uint8_t*)fileBytes, fileSize);
+    assert(clip.numChannels == 2 || clip.numChannels == 1);
+    assert(clip.numBitsPerSample == 16);
 
     HRESULT hr = CoInitializeEx(nullptr, COINIT_SPEED_OVER_MEMORY);
     assert(hr == S_OK);
@@ -157,7 +89,7 @@ int main()
 
     float wavPlaybackTime = 0.0f;
     float wavPlaybackSpeed = 1.0f; // change this to speed up/slow down playback!
-    const float wavDurationSecs = (float)numWavFrames/wav->sampleRate;
+    const float wavDurationSecs = (float)clip.numSamples/(clip.sampleRate * clip.numChannels);
     bool playLooping = true;
 
     bool isRunning = true;
@@ -185,21 +117,22 @@ int main()
 
         for (UINT32 frameIndex = 0; frameIndex < numFramesToWrite; ++frameIndex)
         {
-            float currFrameIndex = wavPlaybackTime * wav->sampleRate;
+            float currFrameIndex = wavPlaybackTime * clip.sampleRate;
             int prevFrameIndex = (int)currFrameIndex;
-            int nextFrameIndex = (prevFrameIndex + 1) % numWavFrames;
+            int nextFrameIndex = (prevFrameIndex + 1) % (clip.numSamples * clip.numChannels);
 
-            int prevLeftSampleIndex = wav->numChannels * prevFrameIndex;
-            int nextLeftSampleIndex = wav->numChannels * nextFrameIndex;
-            int prevRightSampleIndex = prevLeftSampleIndex + wav->numChannels - 1;
-            int nextRightSampleIndex = nextLeftSampleIndex + wav->numChannels - 1;
+            int prevLeftSampleIndex = clip.numChannels * prevFrameIndex;
+            int nextLeftSampleIndex = clip.numChannels * nextFrameIndex;
+            int prevRightSampleIndex = prevLeftSampleIndex + clip.numChannels - 1;
+            int nextRightSampleIndex = nextLeftSampleIndex + clip.numChannels - 1;
 
-            float prevLeftSample = (float)(wav->samples[prevLeftSampleIndex]);
-            float nextLeftSample = (float)(wav->samples[nextLeftSampleIndex]);
-            float prevRightSample = (float)(wav->samples[prevRightSampleIndex]);
-            float nextRightSample = (float)(wav->samples[nextRightSampleIndex]);
+            uint16_t* samples = (uint16_t*)clip.samples;
+            float prevLeftSample = (float)(samples[prevLeftSampleIndex]);
+            float nextLeftSample = (float)(samples[nextLeftSampleIndex]);
+            float prevRightSample = (float)(samples[prevRightSampleIndex]);
+            float nextRightSample = (float)(samples[nextRightSampleIndex]);
 
-            float lerpT = (currFrameIndex - prevFrameIndex) / wav->sampleRate;
+            float lerpT = (currFrameIndex - prevFrameIndex) / clip.sampleRate;
             uint16_t leftSample = (uint16_t)lerp(prevLeftSample, nextLeftSample, lerpT);
             uint16_t rightSample = (uint16_t)lerp(prevRightSample, nextRightSample, lerpT);
             *buffer++ = leftSample;

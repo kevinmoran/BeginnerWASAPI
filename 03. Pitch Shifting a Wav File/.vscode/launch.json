@@ -12,8 +12,6 @@
             "args": [],
             "stopAtEntry": false,
             "cwd": "${workspaceFolder}",
-            "environment": [],
-            "externalConsole": false
         }
     ]
 }

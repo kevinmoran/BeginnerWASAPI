@@ -40,10 +40,11 @@ int main()
 
     audioDevice->Release();
 
+    const int32_t OUTPUT_SAMPLE_RATE = 44100;
     WAVEFORMATEX mixFormat = {};
     mixFormat.wFormatTag = WAVE_FORMAT_PCM;
     mixFormat.nChannels = 2;
-    mixFormat.nSamplesPerSec = 44100;
+    mixFormat.nSamplesPerSec = OUTPUT_SAMPLE_RATE;
     mixFormat.wBitsPerSample = 16;
     mixFormat.nBlockAlign = (mixFormat.nChannels * mixFormat.wBitsPerSample) / 8;
     mixFormat.nAvgBytesPerSec = mixFormat.nSamplesPerSec * mixFormat.nBlockAlign;
