@@ -109,8 +109,8 @@ int main()
         audioClock->GetFrequency(&audioPlaybackFreq);
         audioClock->GetPosition(&audioPlaybackPos, 0);
         audioClock->Release();
-        UINT64 audioPlaybackPosInSeconds = audioPlaybackPos/audioPlaybackFreq;
-        UINT64 audioPlaybackPosInSamples = audioPlaybackPosInSeconds*mixFormat.nSamplesPerSec;
+        //UINT64 audioPlaybackPosInSeconds = audioPlaybackPos/audioPlaybackFreq;
+        //UINT64 audioPlaybackPosInSamples = audioPlaybackPosInSeconds*mixFormat.nSamplesPerSec;
     }
 
     audioClient->Stop();
