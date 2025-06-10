@@ -1,0 +1,6 @@
+{
+    "files.associations": {
+        "stdbool.h": "c",
+        "win32_wasapi.h": "c"
+    }
+}

@@ -1,0 +1,10 @@
+while (wait on wasapi event)
+{
+  float* buffer;
+  GetBuffer(size, &buffer);
+  foreach (sound in active_sound_list) {
+    mix_sound_samples(sound, buffer, size);
+  }
+  ReleaseBuffer(size, 0);
+  update_active_sound_list(messages_from_main_thread);
+}
