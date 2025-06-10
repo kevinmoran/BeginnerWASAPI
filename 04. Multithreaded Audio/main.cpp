@@ -69,28 +69,28 @@ int main()
 			// write at least 100msec of samples into buffer (or whatever space available, whichever is smaller)
 			// this is max amount of time you expect code will take until the next iteration of loop
 			// if code will take more time then you'll hear discontinuity as buffer will be filled with silence
-			size_t writeCount = min(sampleRate/10, audio.sampleCount);
+			size_t numSamplesToWrite = min(sampleRate/10, audio.sampleCount);
 
 			// alternatively you can write as much as "audio.sampleCount" to fully fill the buffer (~1 second)
 			// then you can try to increase delay below to 900+ msec, it still should sound fine
-			//writeCount = audio.sampleCount;
+			//numSamplesToWrite = audio.sampleCount;
 
 			// advance sound playback positions
-			size_t playCount = audio.playCount;
+			size_t playCount = audio.numSamplesPlayedSinceLastTick;
 			SoundUpdate(&background, playCount);
 			SoundUpdate(&effect, playCount);
 
-			printf("Writecount: %u, Playcount: %u\n", writeCount, playCount);
+			// printf("NumSamplesToWrite: %u, Playcount: %u\n", numSamplesToWrite, playCount);
 
 			// initialize output with 0.0f
 			float* output = (float*)audio.sampleBuffer;
-			memset(output, 0, writeCount * bytesPerSample);
+			memset(output, 0, numSamplesToWrite * bytesPerSample);
 
 			// mix sounds into output
-			SoundMix(output, writeCount, 0.3f, &background);
-			SoundMix(output, writeCount, 0.8f, &effect);
+			SoundMix(output, numSamplesToWrite, 0.3f, &background);
+			SoundMix(output, numSamplesToWrite, 0.8f, &effect);
 
-			Win32AudioUnlockBuffer(&audio, writeCount);
+			Win32AudioUnlockBuffer(&audio, numSamplesToWrite);
 		}
 
 		if (delayPressed)

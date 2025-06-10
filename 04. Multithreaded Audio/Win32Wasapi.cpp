@@ -44,8 +44,8 @@ static DWORD CALLBACK WA__AudioThread(LPVOID arg)
 
 	IAudioClient* client = audio->client;
 
-	IAudioRenderClient* playback;
-	HRESULT hr = client->GetService(__uuidof(IAudioRenderClient), (LPVOID*)&playback);
+	IAudioRenderClient* renderClient;
+	HRESULT hr = client->GetService(__uuidof(IAudioRenderClient), (LPVOID*)&renderClient);
     assert(SUCCEEDED(hr));
 
 	// get audio buffer size in samples
@@ -58,7 +58,7 @@ static DWORD CALLBACK WA__AudioThread(LPVOID arg)
     assert(SUCCEEDED(hr));
 
 	UINT32 bytesPerSample = audio->bufferFormat->nBlockAlign;
-	UINT32 rbMask = audio->rbSize - 1;
+	UINT32 rbMask = audio->ringBufferSize - 1;
 	BYTE* input = audio->buffer1;
 
 	while (WaitForSingleObject(audio->event, INFINITE) == WAIT_OBJECT_0)
@@ -75,7 +75,7 @@ static DWORD CALLBACK WA__AudioThread(LPVOID arg)
 		// get output buffer from WASAPI
 		BYTE* output;
 		UINT32 maxOutputSamples = bufferSamples - paddingSamples;
-		hr = playback->GetBuffer(maxOutputSamples, &output);
+		hr = renderClient->GetBuffer(maxOutputSamples, &output);
     	assert(SUCCEEDED(hr));
 
 		WA__Lock(audio);
@@ -85,44 +85,47 @@ static DWORD CALLBACK WA__AudioThread(LPVOID arg)
 
 		// how many bytes available to read from ringbuffer
 		UINT32 availableSize = writeOffset - readOffset;
-
-		// how many samples available
-		UINT32 availableSamples = availableSize / bytesPerSample;
+		UINT32 numSamplesAvailable = availableSize / bytesPerSample;
 
 		// will use up to max that's possible to output
-		UINT32 useSamples = min(availableSamples, maxOutputSamples);
+		UINT32 numSamplesToSubmit = min(numSamplesAvailable, maxOutputSamples);
 
-		// how many bytes to use
-		UINT32 useSize = useSamples * bytesPerSample;
+		// how many bytes we will read from ringbuffer
+		UINT32 numBytesToRead = numSamplesToSubmit * bytesPerSample;
 
-		// lock range [read, lock) that memcpy will read from below
-		audio->rbLockOffset = readOffset + useSize;
-
-		// will always submit required amount of samples, but if there's not enough to use, then submit silence
-		UINT32 submitCount = useSamples ? useSamples : maxOutputSamples;
-		DWORD flags = useSamples ? 0 : AUDCLNT_BUFFERFLAGS_SILENT;
+		// lock the range [read, lock) we will be reading
+		// so the main thread cannot overwrite it.
+		audio->rbLockOffset = readOffset + numBytesToRead;
+		
+		DWORD flags = 0;
+		// If we have no samples to submit, fill buffer with silence
+		if (numSamplesToSubmit == 0)
+		{
+			numSamplesToSubmit = maxOutputSamples;
+			flags = AUDCLNT_BUFFERFLAGS_SILENT;
+		}
 
 		// remember how many samples are submitted
-		audio->bufferUsed += submitCount;
+		audio->numSamplesSubmittedSinceLastTick += numSamplesToSubmit;
 
 		WA__Unlock(audio);
 
 		// copy bytes to output
 		// safe to do it outside WA__Lock/Unlock, because nobody will overwrite [read, lock) interval
-		memcpy(output, input + (readOffset & rbMask), useSize);
+		memcpy(output, input + (readOffset & rbMask), numBytesToRead);
 
 		// advance read offset up to lock position, allows writing to [read, lock) interval
-		InterlockedAdd(&audio->rbReadOffset, useSize);
+		InterlockedAdd(&audio->rbReadOffset, numBytesToRead);
 
 		// submit output buffer to WASAPI
-		hr = playback->ReleaseBuffer(submitCount, flags);
+		hr = renderClient->ReleaseBuffer(numSamplesToSubmit, flags);
     	assert(SUCCEEDED(hr));
 	}
 
 	// stop the playback
 	hr = client->Stop();
 	assert(SUCCEEDED(hr));
-	playback->Release();
+	renderClient->Release();
 
 	AvRevertMmThreadCharacteristics(handle);
 	return 0;
@@ -227,7 +230,7 @@ void Win32AudioStart(WasapiAudio* audio, size_t sampleRate, size_t channelCount,
 	UINT32 bufferSamples;
 	hr = audio->client->GetBufferSize(&bufferSamples);
 	assert(SUCCEEDED(hr));
-	audio->bufferSize = bufferSamples * audio->bufferFormat->nBlockAlign;
+	audio->outputBufferSize = bufferSamples * audio->bufferFormat->nBlockAlign;
 
 	// setup event handle to wait on
 	audio->event = CreateEventW(NULL, FALSE, FALSE, NULL);
@@ -235,24 +238,27 @@ void Win32AudioStart(WasapiAudio* audio, size_t sampleRate, size_t channelCount,
 	assert(SUCCEEDED(hr));
 
 	// use at least 64KB or 1 second whichever is larger, and round upwards to pow2 for ringbuffer
-	DWORD rbSize = RoundUpPow2(max(64 * 1024, audio->bufferFormat->nAvgBytesPerSec));
+	DWORD ringBufferSize = RoundUpPow2(max(64 * 1024, audio->bufferFormat->nAvgBytesPerSec));
 
+	// Explanation of Magic Ring Buffer: https://fgiesen.wordpress.com/2012/07/21/the-magic-ring-buffer/
+	// MSDN Example code: https://learn.microsoft.com/en-us/windows/win32/api/memoryapi/nf-memoryapi-virtualalloc2#examples
+	
 	// reserve virtual address placeholder for 2x size for magic ringbuffer
-	char* placeholder1 = (char*)VirtualAlloc2(NULL, NULL, 2 * rbSize, MEM_RESERVE | MEM_RESERVE_PLACEHOLDER, PAGE_NOACCESS, NULL, 0);
-	char* placeholder2 = placeholder1 + rbSize;
+	char* placeholder1 = (char*)VirtualAlloc2(NULL, NULL, 2 * ringBufferSize, MEM_RESERVE | MEM_RESERVE_PLACEHOLDER, PAGE_NOACCESS, NULL, 0);
+	char* placeholder2 = placeholder1 + ringBufferSize;
 	assert(placeholder1);
 
 	// split allocated address space in half
-	BOOL ok = VirtualFree(placeholder1, rbSize, MEM_RELEASE | MEM_PRESERVE_PLACEHOLDER);
+	BOOL ok = VirtualFree(placeholder1, ringBufferSize, MEM_RELEASE | MEM_PRESERVE_PLACEHOLDER);
 	assert(ok);
 
 	// create page-file backed section for buffer
-	HANDLE section = CreateFileMappingW(INVALID_HANDLE_VALUE, NULL, PAGE_READWRITE, 0, rbSize, NULL);
+	HANDLE section = CreateFileMappingW(INVALID_HANDLE_VALUE, NULL, PAGE_READWRITE, 0, ringBufferSize, NULL);
 	assert(section);
 
 	// map same section into both addresses
-	void* view1 = MapViewOfFile3(section, NULL, placeholder1, 0, rbSize, MEM_REPLACE_PLACEHOLDER, PAGE_READWRITE, NULL, 0);
-	void* view2 = MapViewOfFile3(section, NULL, placeholder2, 0, rbSize, MEM_REPLACE_PLACEHOLDER, PAGE_READWRITE, NULL, 0);
+	void* view1 = MapViewOfFile3(section, NULL, placeholder1, 0, ringBufferSize, MEM_REPLACE_PLACEHOLDER, PAGE_READWRITE, NULL, 0);
+	void* view2 = MapViewOfFile3(section, NULL, placeholder2, 0, ringBufferSize, MEM_REPLACE_PLACEHOLDER, PAGE_READWRITE, NULL, 0);
 	assert(view1 && view2);
 
 	// this is ok, actual memory will be freed only when it is unmapped
@@ -262,11 +268,11 @@ void Win32AudioStart(WasapiAudio* audio, size_t sampleRate, size_t channelCount,
 
 	audio->sampleBuffer = NULL;
 	audio->sampleCount = 0;
-	audio->playCount = 0;
+	audio->numSamplesPlayedSinceLastTick = 0;
 	audio->buffer1 = (BYTE*)view1;
 	audio->buffer2 = (BYTE*)view2;
-	audio->rbSize = rbSize;
-	audio->bufferUsed = 0;
+	audio->ringBufferSize = ringBufferSize;
+	audio->numSamplesSubmittedSinceLastTick = 0;
 	audio->bufferFirstLock = TRUE;
 	audio->rbReadOffset = 0;
 	audio->rbLockOffset = 0;
@@ -302,8 +308,8 @@ void Win32AudioStop(WasapiAudio* audio)
 void Win32AudioLockBuffer(WasapiAudio* audio)
 {
 	UINT32 bytesPerSample = audio->bufferFormat->nBlockAlign;
-	UINT32 rbSize = audio->rbSize;
-	UINT32 bufferSize = audio->bufferSize;
+	UINT32 ringBufferSize = audio->ringBufferSize;
+	UINT32 outputBufferSize = audio->outputBufferSize;
 
 	WA__Lock(audio);
 
@@ -311,45 +317,47 @@ void Win32AudioLockBuffer(WasapiAudio* audio)
 	UINT32 lockOffset = audio->rbLockOffset;
 	UINT32 writeOffset = audio->rbWriteOffset;
 
-	// how many bytes are used in buffer by reader = [read, lock) range
-	UINT32 usedSize = lockOffset - readOffset;
+	// how many bytes are in use by audio thread = [read, lock) range
+	UINT32 numBytesInUse = lockOffset - readOffset;
 
 	// make sure there are samples available for one wasapi buffer submission
 	// so in case audio thread needs samples before UnlockBuffer is called, it can get some 
-	if (usedSize < bufferSize)
+	if (numBytesInUse < outputBufferSize)
 	{
-		// how many bytes available in current buffer = [read, write) range
-		UINT32 availSize = writeOffset - readOffset;
+		// Num bytes we've written to ringbuffer = [read, write) range
+		// i.e. upper bound on what audio thread can submit to wasapi
+		UINT32 numBytesWritten = writeOffset - readOffset;
 
-		// if [read, lock) is smaller than bufferSize buffer, then increase lock to [read, read+bufferSize) range
-		usedSize = min(bufferSize, availSize);
-		audio->rbLockOffset = lockOffset = readOffset + usedSize;
+		// if [read, lock) is smaller than outputBufferSize buffer, then try to increase
+		// lock to [read, read+outputBufferSize) range (capped at the number of bytes written)
+		numBytesInUse = min(outputBufferSize, numBytesWritten);
+		audio->rbLockOffset = lockOffset = readOffset + numBytesInUse;
 	}
 
 	// how many bytes can be written to buffer
-	UINT32 writeSize = rbSize - usedSize;
+	UINT32 availableSize = ringBufferSize - numBytesInUse;
 
 	// reset write marker to beginning of lock offset (can start writing there)
 	audio->rbWriteOffset = lockOffset;
 
-	// reset play sample count, use 0 for playCount when LockBuffer is called first time
-	audio->playCount = audio->bufferFirstLock ? 0 : audio->bufferUsed;
+	// reset play sample count, use 0 for numSamplesPlayedSinceLastTick when LockBuffer is called first time
+	audio->numSamplesPlayedSinceLastTick = /*audio->bufferFirstLock ? 0 : */audio->numSamplesSubmittedSinceLastTick;
 	audio->bufferFirstLock = FALSE;
-	audio->bufferUsed = 0;
+	audio->numSamplesSubmittedSinceLastTick = 0;
 
 	WA__Unlock(audio);
 
 	// buffer offset/size where to write
 	// safe to write in [write, read) range, because reading happen in [read, lock) range (lock==write)
-	audio->sampleBuffer = audio->buffer1 + (lockOffset & (rbSize - 1));
-	audio->sampleCount = writeSize / bytesPerSample;
+	audio->sampleBuffer = audio->buffer1 + (lockOffset & (ringBufferSize - 1));
+	audio->sampleCount = availableSize / bytesPerSample;
 }
 
-void Win32AudioUnlockBuffer(WasapiAudio* audio, size_t writtenSamples)
+void Win32AudioUnlockBuffer(WasapiAudio* audio, size_t numSamplesWritten)
 {
 	UINT32 bytesPerSample = audio->bufferFormat->nBlockAlign;
-	size_t writeSize = writtenSamples * bytesPerSample;
+	size_t numBytesWritten = numSamplesWritten * bytesPerSample;
 
 	// advance write offset to allow reading new samples
-	InterlockedAdd(&audio->rbWriteOffset, (LONG)writeSize);
+	InterlockedAdd(&audio->rbWriteOffset, (LONG)numBytesWritten);
 }
