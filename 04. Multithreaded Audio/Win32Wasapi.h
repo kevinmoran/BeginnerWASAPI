@@ -3,39 +3,34 @@
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 
-// "count" means sample count (for example, 1 sample = 2 floats for stereo)
-// "offset" or "size" means byte count
-
 struct tWAVEFORMATEX;
 struct IAudioClient;
 
 struct WasapiAudio
 {
-	// public part
-	
-	// describes sampleBuffer format
-	tWAVEFORMATEX* bufferFormat;
-
-	// use these values only between LockBuffer/UnlockBuffer calls
-	void* sampleBuffer;  // ringbuffer for interleaved samples, no need to handle wrapping
-	size_t sampleCount;  // how big is buffer in samples
-	size_t numSamplesPlayedSinceLastTick;
-
-	// private
 	IAudioClient* client;
 	HANDLE event;
 	HANDLE thread;
 	LONG stop;
-	LONG lock;
+	
 	BYTE* buffer1;
 	BYTE* buffer2;
-	UINT32 outputBufferSize;	// output buffer size in bytes
-	UINT32 ringBufferSize;		// ringbuffer size, always power of 2
-	UINT32 numSamplesSubmittedSinceLastTick; // how many samples are used from buffer
-	bool bufferFirstLock;       // true when Win32AudioLockBuffer is used at least once
+	tWAVEFORMATEX* bufferFormat;
+	UINT32 outputBufferSize; // in bytes
+	UINT32 ringBufferSize; // in bytes, always power of 2
+	
+	LONG lock;
+	UINT32 numSamplesSubmittedSinceLastTick;
 	volatile LONG rbReadOffset; // offset to read from buffer
 	volatile LONG rbLockOffset; // offset up to point in buffer that's in use
 	volatile LONG rbWriteOffset; // offset up to point buffer is filled
+};
+
+struct WasapiAudioLockContext
+{
+	float* outputSamples;
+	size_t numSamplesToWrite;
+	size_t numSamplesPlayedSinceLastTick;
 };
 
 // pass 0 for rate/count/mask to get default format of output device (use audio->bufferFormat)
@@ -47,5 +42,5 @@ void Win32AudioStop(WasapiAudio* audio);
 
 // once locked, then you're allowed to write samples into the ringbuffer
 // use only sampleBuffer, sampleCount and numSamplesPlayedSinceLastTick members
-void Win32AudioLockBuffer(WasapiAudio* audio);
+WasapiAudioLockContext Win32AudioLockBuffer(WasapiAudio* audio);
 void Win32AudioUnlockBuffer(WasapiAudio* audio, size_t writtenCount);

@@ -141,6 +141,8 @@ DWORD RoundUpPow2(DWORD value)
 
 void Win32AudioStart(WasapiAudio* audio, size_t sampleRate, size_t channelCount, DWORD channelMask)
 {
+	*audio = {};
+
 	// initialize COM
 	HRESULT hr = CoInitializeEx(NULL, COINIT_APARTMENTTHREADED);
 	assert(SUCCEEDED(hr));
@@ -266,19 +268,9 @@ void Win32AudioStart(WasapiAudio* audio, size_t sampleRate, size_t channelCount,
 	VirtualFree(placeholder2, 0, MEM_RELEASE);
 	CloseHandle(section);
 
-	audio->sampleBuffer = NULL;
-	audio->sampleCount = 0;
-	audio->numSamplesPlayedSinceLastTick = 0;
 	audio->buffer1 = (BYTE*)view1;
 	audio->buffer2 = (BYTE*)view2;
 	audio->ringBufferSize = ringBufferSize;
-	audio->numSamplesSubmittedSinceLastTick = 0;
-	audio->bufferFirstLock = TRUE;
-	audio->rbReadOffset = 0;
-	audio->rbLockOffset = 0;
-	audio->rbWriteOffset = 0;
-	InterlockedExchange(&audio->stop, FALSE);
-	InterlockedExchange(&audio->lock, FALSE);
 	audio->thread = CreateThread(NULL, 0, &WA__AudioThread, audio, 0, NULL);
 }
 
@@ -305,7 +297,7 @@ void Win32AudioStop(WasapiAudio* audio)
 	CoUninitialize();
 }
 
-void Win32AudioLockBuffer(WasapiAudio* audio)
+WasapiAudioLockContext Win32AudioLockBuffer(WasapiAudio* audio)
 {
 	UINT32 bytesPerSample = audio->bufferFormat->nBlockAlign;
 	UINT32 ringBufferSize = audio->ringBufferSize;
@@ -340,17 +332,30 @@ void Win32AudioLockBuffer(WasapiAudio* audio)
 	// reset write marker to beginning of lock offset (can start writing there)
 	audio->rbWriteOffset = lockOffset;
 
-	// reset play sample count, use 0 for numSamplesPlayedSinceLastTick when LockBuffer is called first time
-	audio->numSamplesPlayedSinceLastTick = /*audio->bufferFirstLock ? 0 : */audio->numSamplesSubmittedSinceLastTick;
-	audio->bufferFirstLock = FALSE;
+	UINT32 playCount = audio->numSamplesSubmittedSinceLastTick;
 	audio->numSamplesSubmittedSinceLastTick = 0;
 
 	WA__Unlock(audio);
 
+	WasapiAudioLockContext context = {};
+	context.numSamplesPlayedSinceLastTick = playCount;
+
 	// buffer offset/size where to write
 	// safe to write in [write, read) range, because reading happen in [read, lock) range (lock==write)
-	audio->sampleBuffer = audio->buffer1 + (lockOffset & (ringBufferSize - 1));
-	audio->sampleCount = availableSize / bytesPerSample;
+	context.outputSamples = (float*)(audio->buffer1 + (lockOffset & (ringBufferSize - 1)));
+	
+	// write at least 100msec of samples into buffer (or whatever space available, whichever is smaller)
+	// this is max amount of time you expect code will take until the next iteration of loop
+	// if code will take more time then you'll hear discontinuity as buffer will be filled with silence
+	UINT32 numSamplesAvailable = availableSize / bytesPerSample;
+	context.numSamplesToWrite = min(audio->bufferFormat->nSamplesPerSec/10, numSamplesAvailable);
+	// alternatively you can write as much as "audio.sampleCount" to fully fill the buffer (~1 second)
+	// then you can try to increase delay below to 900+ msec, it still should sound fine
+	//numSamplesToWrite = audio.sampleCount;
+	
+	memset(context.outputSamples, 0, context.numSamplesToWrite * bytesPerSample);
+
+	return context;
 }
 
 void Win32AudioUnlockBuffer(WasapiAudio* audio, size_t numSamplesWritten)
