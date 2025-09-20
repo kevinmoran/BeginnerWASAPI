@@ -11,15 +11,15 @@
 
 int main()
 {
-	WasapiAudio audio = {};
+	Win32Audio audio = {};
 	size_t sampleRate = 48000;
 	Win32AudioStart(&audio, 48000, 2, SPEAKER_FRONT_LEFT | SPEAKER_FRONT_RIGHT);
 
-	// background "music" that will be looping
+	// Background "music" that will be looping
 	Sound background = SoundLoad(L"C:/Windows/Media/Ring10.wav", sampleRate);
 	background.isLooping = true;
 
-	// simple sound effect, won't be looping
+	// One-shot sound effect
 	Sound effect = SoundLoad(L"C:/Windows/Media/tada.wav", sampleRate);
 
 	printf("Press SPACE for sound effect, D for small delay, or ESC to stop\n");
@@ -63,33 +63,32 @@ int main()
 		}
 
 		{
-			WasapiAudioLockContext lockContext = Win32AudioLockBuffer(&audio);
-			size_t numSamplesToWrite = lockContext.numSamplesToWrite;
+			Win32AudioWriteContext writeContext = Win32AudioAcquireWriteContext(&audio);
+			size_t numSamplesToWrite = writeContext.numSamplesToWrite;
 
-			// advance sound playback positions
-			size_t playCount = lockContext.numSamplesPlayedSinceLastTick;
+			// Advance sound playback positions
+			size_t playCount = writeContext.numSamplesPlayedSinceLastTick;
 			SoundUpdate(&background, playCount);
 			SoundUpdate(&effect, playCount);
 
-
-			// mix sounds into output
-			float* output = lockContext.outputSamples;
+			// Mix sounds into output
+			float* output = writeContext.outputSamples;
 			SoundMix(output, numSamplesToWrite, 0.3f, &background);
 			SoundMix(output, numSamplesToWrite, 0.8f, &effect);
 
-			Win32AudioUnlockBuffer(&audio, numSamplesToWrite);
+			Win32AudioReleaseWriteContext(&audio, writeContext);
 		}
 
 		if (delayPressed)
 		{
+			// Simulate a big game code stutter (~5fps) with a delay
 			printf("delay!\n");
-			Sleep(5 * 17); // large delay for ~5 frames = ~68 msec
-			//Sleep(900);
+			Sleep(5 * 17);
 		}
 		else
 		{
-			// just a small delay, pretend this is your normal rendering code
-			Sleep(17); // "60" fps
+			// ~60fps delay to simulate game code running
+			Sleep(17);
 		}
 
 		printf(".");

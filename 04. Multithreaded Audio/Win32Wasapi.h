@@ -6,7 +6,7 @@
 struct tWAVEFORMATEX;
 struct IAudioClient;
 
-struct WasapiAudio
+struct Win32Audio
 {
 	IAudioClient* client;
 	HANDLE event;
@@ -16,31 +16,31 @@ struct WasapiAudio
 	BYTE* buffer1;
 	BYTE* buffer2;
 	tWAVEFORMATEX* bufferFormat;
-	UINT32 outputBufferSize; // in bytes
-	UINT32 ringBufferSize; // in bytes, always power of 2
+	UINT32 outputBufferNumBytes;
+	UINT32 ringBufferNumBytes; // always power of 2
 	
 	LONG lock;
 	UINT32 numSamplesSubmittedSinceLastTick;
-	volatile LONG rbReadOffset; // offset to read from buffer
-	volatile LONG rbLockOffset; // offset up to point in buffer that's in use
-	volatile LONG rbWriteOffset; // offset up to point buffer is filled
+	volatile LONG rbReadOffset; // offset for audio thread to read from buffer
+	volatile LONG rbLockOffset; // offset to end of region audio thread is reading
+	volatile LONG rbWriteOffset; // offset to point main loop has written to
 };
 
-struct WasapiAudioLockContext
+struct Win32AudioWriteContext
 {
 	float* outputSamples;
 	size_t numSamplesToWrite;
 	size_t numSamplesPlayedSinceLastTick;
 };
 
-// pass 0 for rate/count/mask to get default format of output device (use audio->bufferFormat)
+// Pass 0 for rate/count/mask to get default format of output device (use audio->bufferFormat)
 // channelMask is bitmask of values from table here: https://learn.microsoft.com/en-us/windows/win32/api/mmreg/ns-mmreg-waveformatextensible#remarks
-void Win32AudioStart(WasapiAudio* audio, size_t sampleRate, size_t numChannels, DWORD channelMask);
+void Win32AudioStart(Win32Audio* audio, size_t sampleRate, size_t numChannels, DWORD channelMask);
 
-// stops the playback and releases resources
-void Win32AudioStop(WasapiAudio* audio);
+// Stops playback and releases resources
+void Win32AudioStop(Win32Audio* audio);
 
-// once locked, then you're allowed to write samples into the ringbuffer
-// use only sampleBuffer, sampleCount and numSamplesPlayedSinceLastTick members
-WasapiAudioLockContext Win32AudioLockBuffer(WasapiAudio* audio);
-void Win32AudioUnlockBuffer(WasapiAudio* audio, size_t writtenCount);
+// Lock a region of audio buffer for writing, returned in context struct
+Win32AudioWriteContext Win32AudioAcquireWriteContext(Win32Audio* audio);
+// Releases previously locked region of buffer to audio thread for reading
+void Win32AudioReleaseWriteContext(Win32Audio* audio, Win32AudioWriteContext context);
