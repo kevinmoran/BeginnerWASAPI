@@ -19,7 +19,7 @@ struct Win32Audio
 	UINT32 outputBufferNumBytes;
 	UINT32 ringBufferNumBytes; // always power of 2
 	
-	LONG lock;
+	SRWLOCK lock;
 	UINT32 numSamplesSubmittedSinceLastTick;
 	volatile LONG rbReadOffset; // offset for audio thread to read from buffer
 	volatile LONG rbLockOffset; // offset to end of region audio thread is reading

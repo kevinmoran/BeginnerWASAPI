@@ -16,8 +16,6 @@
 #pragma comment (lib, "onecore")
 
 // Forward declare internal functions
-static void _AcquireLock(Win32Audio* audio);
-static void _ReleaseLock(Win32Audio* audio);
 static DWORD CALLBACK _AudioThreadProc(LPVOID arg);
 
 DWORD RoundUpPow2(DWORD value)
@@ -159,6 +157,7 @@ void Win32AudioStart(Win32Audio* audio, size_t sampleRate, size_t channelCount, 
 	audio->buffer1 = (BYTE*)view1;
 	audio->buffer2 = (BYTE*)view2;
 	audio->ringBufferNumBytes = ringBufferNumBytes;
+	InitializeSRWLock(&audio->lock);
 	audio->thread = CreateThread(NULL, 0, &_AudioThreadProc, audio, 0, NULL);
 }
 
@@ -192,7 +191,7 @@ Win32AudioWriteContext Win32AudioAcquireWriteContext(Win32Audio* audio)
 	UINT32 ringBufferNumBytes = audio->ringBufferNumBytes;
 	UINT32 outputBufferNumBytes = audio->outputBufferNumBytes;
 
-	_AcquireLock(audio);
+	AcquireSRWLockExclusive(&audio->lock);
 
 	// How many bytes are in use by audio thread = [read, lock) range
 	UINT32 numBytesInUse = audio->rbLockOffset - audio->rbReadOffset;
@@ -217,7 +216,7 @@ Win32AudioWriteContext Win32AudioAcquireWriteContext(Win32Audio* audio)
 	context.numSamplesPlayedSinceLastTick = audio->numSamplesSubmittedSinceLastTick;
 	audio->numSamplesSubmittedSinceLastTick = 0;
 
-	_ReleaseLock(audio);
+	ReleaseSRWLockExclusive(&audio->lock);
 
 	// UINT32 writeOffset = audio->rbWriteOffset % ringBufferNumBytes;
 	// Fast modulus because ringBufferNumBytes is power of 2
@@ -246,28 +245,6 @@ void Win32AudioReleaseWriteContext(Win32Audio* audio, Win32AudioWriteContext con
 
 	// Advance write offset to allow audio thread to read new samples
 	InterlockedAdd(&audio->rbWriteOffset, (LONG)numBytesWritten);
-}
-
-// Internal helper for thread synchronisation
-static void _AcquireLock(Win32Audio* audio)
-{
-	// Try to toggle audio->lock from FALSE to TRUE
-	while (InterlockedCompareExchange(&audio->lock, TRUE, FALSE) != FALSE)
-	{
-		// It was already TRUE, wait for whoever locked it to wake us
-		LONG locked = FALSE;
-		WaitOnAddress(&audio->lock, &locked, sizeof(locked), INFINITE);
-	}
-	// Now audio->lock == TRUE
-}
-
-// Internal helper for thread synchronisation
-static void _ReleaseLock(Win32Audio* audio)
-{
-	// Set audio->lock to FALSE
-	InterlockedExchange(&audio->lock, FALSE);
-	// Wake any threads waiting on lock
-	WakeByAddressSingle(&audio->lock);
 }
 
 // Entry point for audio thread
@@ -315,7 +292,7 @@ static DWORD CALLBACK _AudioThreadProc(LPVOID arg)
 		hr = renderClient->GetBuffer(maxNumSamplesToOutput, &outputBuffer);
     	assert(SUCCEEDED(hr));
 
-		_AcquireLock(audio);
+		AcquireSRWLockExclusive(&audio->lock);
 
 		// Num bytes available to read from ringbuffer
 		UINT32 numBytesAvailable = audio->rbWriteOffset - audio->rbReadOffset;
@@ -342,7 +319,7 @@ static DWORD CALLBACK _AudioThreadProc(LPVOID arg)
 
 		// Can now unlock buffer for main thread, it won't write in
 		// [read, lock) interval while we're copying to output buffer
-		_ReleaseLock(audio);
+		ReleaseSRWLockExclusive(&audio->lock);
 
 		memcpy(outputBuffer, ringBuffer + (audio->rbReadOffset & rbMask), numBytesToRead);
 
