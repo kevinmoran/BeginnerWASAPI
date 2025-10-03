@@ -3,9 +3,9 @@
 // This example implements resampling of the wav data to support
 // different sample rates and to allow playback at different speeds
 
-#include <windows.h>
-#include <mmdeviceapi.h>
 #include <audioclient.h>
+#include <mmdeviceapi.h>
+#include <windows.h>
 
 #include <assert.h>
 #include <stdint.h>
@@ -13,8 +13,9 @@
 #include "LoadWavFile.h"
 #include "Win32LoadEntireFile.h"
 
-inline float lerp(float a, float b, float t){
-    return a + (b-a)*t;
+inline float lerp(float a, float b, float t)
+{
+    return a + (b - a) * t;
 }
 
 int main()
@@ -33,7 +34,8 @@ int main()
     assert(hr == S_OK);
 
     IMMDeviceEnumerator* deviceEnumerator;
-    hr = CoCreateInstance(__uuidof(MMDeviceEnumerator), nullptr, CLSCTX_ALL, __uuidof(IMMDeviceEnumerator), (LPVOID*)(&deviceEnumerator));
+    hr = CoCreateInstance(__uuidof(MMDeviceEnumerator), nullptr, CLSCTX_ALL,
+                          __uuidof(IMMDeviceEnumerator), (LPVOID*)(&deviceEnumerator));
     assert(hr == S_OK);
 
     IMMDevice* audioDevice;
@@ -43,7 +45,8 @@ int main()
     deviceEnumerator->Release();
 
     IAudioClient2* audioClient;
-    hr = audioDevice->Activate(__uuidof(IAudioClient2), CLSCTX_ALL, nullptr, (LPVOID*)(&audioClient));
+    hr = audioDevice->Activate(__uuidof(IAudioClient2), CLSCTX_ALL, nullptr,
+                               (LPVOID*)(&audioClient));
     assert(hr == S_OK);
 
     audioDevice->Release();
@@ -59,14 +62,12 @@ int main()
 
     const float BUFFER_SIZE_IN_SECONDS = 2.0f;
     const int64_t REFTIMES_PER_SEC = 10000000; // hundred nanoseconds
-    REFERENCE_TIME requestedSoundBufferDuration = (REFERENCE_TIME)(REFTIMES_PER_SEC * BUFFER_SIZE_IN_SECONDS);
-    DWORD initStreamFlags = ( AUDCLNT_STREAMFLAGS_RATEADJUST 
-                            | AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM
-                            | AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY );
-    hr = audioClient->Initialize(AUDCLNT_SHAREMODE_SHARED, 
-                                 initStreamFlags, 
-                                 requestedSoundBufferDuration, 
-                                 0, &mixFormat, nullptr);
+    REFERENCE_TIME requestedSoundBufferDuration =
+    (REFERENCE_TIME)(REFTIMES_PER_SEC * BUFFER_SIZE_IN_SECONDS);
+    DWORD initStreamFlags = (AUDCLNT_STREAMFLAGS_RATEADJUST | AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM |
+                             AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY);
+    hr = audioClient->Initialize(AUDCLNT_SHAREMODE_SHARED, initStreamFlags,
+                                 requestedSoundBufferDuration, 0, &mixFormat, nullptr);
     assert(hr == S_OK);
 
     IAudioRenderClient* audioRenderClient;
@@ -78,22 +79,21 @@ int main()
     assert(hr == S_OK);
 
     // IAudioClock* audioClock;
-    // hr = audioClient->GetService(__uuidof(IAudioClock), (LPVOID*)(&audioClock));
-    // assert(hr == S_OK);
-    // UINT64 audioPlaybackFreq;
-    // hr = audioClock->GetFrequency(&audioPlaybackFreq);
-    // assert(hr == S_OK);
+    // hr = audioClient->GetService(__uuidof(IAudioClock),
+    // (LPVOID*)(&audioClock)); assert(hr == S_OK); UINT64 audioPlaybackFreq; hr
+    // = audioClock->GetFrequency(&audioPlaybackFreq); assert(hr == S_OK);
 
     hr = audioClient->Start();
     assert(hr == S_OK);
 
     float wavPlaybackTime = 0.0f;
     float wavPlaybackSpeed = 1.0f; // change this to speed up/slow down playback!
-    const float wavDurationSecs = (float)clip.numSamples/(clip.sampleRate * clip.numChannels);
+    const float wavDurationSecs =
+    (float)clip.numSamples / (clip.sampleRate * clip.numChannels);
     bool playLooping = true;
 
     bool isRunning = true;
-    while (isRunning)
+    while(isRunning)
     {
         // Padding is how much valid data is queued up in the sound buffer
         // if there's enough padding then we could skip writing more data
@@ -107,15 +107,16 @@ int main()
         // between pressing jump and hearing the sound effect)
         // Try setting this to e.g. 1/250.f to hear what happens when
         // we're not writing enough data to stay ahead of playback!
-        const float TARGET_BUFFER_PADDING_IN_SECONDS = 1/60.f;
-        UINT32 targetBufferPadding = UINT32(bufferSizeInFrames * TARGET_BUFFER_PADDING_IN_SECONDS);
+        const float TARGET_BUFFER_PADDING_IN_SECONDS = 1 / 60.f;
+        UINT32 targetBufferPadding =
+        UINT32(bufferSizeInFrames * TARGET_BUFFER_PADDING_IN_SECONDS);
         UINT32 numFramesToWrite = targetBufferPadding - bufferPadding;
 
         int16_t* buffer;
         hr = audioRenderClient->GetBuffer(numFramesToWrite, (BYTE**)(&buffer));
         assert(hr == S_OK);
 
-        for (UINT32 frameIndex = 0; frameIndex < numFramesToWrite; ++frameIndex)
+        for(UINT32 frameIndex = 0; frameIndex < numFramesToWrite; ++frameIndex)
         {
             float currFrameIndex = wavPlaybackTime * clip.sampleRate;
             int prevFrameIndex = (int)currFrameIndex;
@@ -139,11 +140,13 @@ int main()
             *buffer++ = rightSample;
 
             wavPlaybackTime += wavPlaybackSpeed / OUTPUT_SAMPLE_RATE;
-            
-            if(wavPlaybackTime >= wavDurationSecs){
+
+            if(wavPlaybackTime >= wavDurationSecs)
+            {
                 // Reached end of sound. Can choose to loop or stop
                 wavPlaybackTime -= wavDurationSecs;
-                if(!playLooping) {
+                if(!playLooping)
+                {
                     isRunning = false;
                     break;
                 }

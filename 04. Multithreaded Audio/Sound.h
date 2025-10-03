@@ -2,10 +2,10 @@
 
 struct Sound
 {
-	short* samples;
-	size_t numSamples;
-	size_t pos;
-	bool isLooping;
+    short* samples;
+    size_t numSamples;
+    size_t pos;
+    bool isLooping;
 };
 
 // loads any supported sound file, and resamples to mono 16-bit audio with specified sample rate

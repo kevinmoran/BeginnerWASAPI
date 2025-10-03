@@ -1,6 +1,8 @@
+#pragma once
 #include <stdint.h>
 
-struct AudioClip {
+struct AudioClip
+{
     uint32_t numChannels;
     uint32_t numBitsPerSample;
     uint32_t sampleRate;
