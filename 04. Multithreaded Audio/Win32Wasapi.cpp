@@ -204,6 +204,7 @@ Win32AudioWriteContext Win32AudioAcquireWriteContext(Win32Audio* audio)
     UINT32 bytesPerSample = audio->bufferFormat->nBlockAlign;
     UINT32 ringBufferNumBytes = audio->ringBufferNumBytes;
     UINT32 outputBufferNumBytes = audio->outputBufferNumBytes;
+    UINT32 sampleRate = audio->bufferFormat->nSamplesPerSec;
 
     AcquireSRWLockExclusive(&audio->lock);
 
@@ -232,20 +233,25 @@ Win32AudioWriteContext Win32AudioAcquireWriteContext(Win32Audio* audio)
 
     ReleaseSRWLockExclusive(&audio->lock);
 
+    // (a % b) == (a & (b-1)) if b is a power of 2
     // UINT32 writeOffset = audio->rbWriteOffset % ringBufferNumBytes;
-    // Fast modulus because ringBufferNumBytes is power of 2
     UINT32 writeOffset = audio->rbWriteOffset & (ringBufferNumBytes - 1);
+
+    UINT32 numSamplesAvailable = numBytesAvailable / bytesPerSample;
+
+    // Set worstCaseTickTimeInSecs to the max amount of time you expect main
+    // loop will take until the next tick (100ms here). If a tick exceeds this
+    // time audio will stutter as audio thread will fill the gap with silence
+    float worstCaseTickTimeInSecs = 0.1f;
+    // This is the number of samples we will make sure are "speculatively" written
+    // to the ringbuffer and available to the audio thread to submit at all times,
+    // to avoid stutters if a tick runs long
+    UINT32 numPaddingSamples = (UINT32)(sampleRate * worstCaseTickTimeInSecs);
+
+    context.numSamplesToWrite = min(numPaddingSamples, numSamplesAvailable);
 
     // Return pointer to ringbuffer at write offset
     context.outputSamples = (float*)(audio->buffer1 + writeOffset);
-
-    UINT32 numSamplesAvailable = numBytesAvailable / bytesPerSample;
-    // Set minNumSamplesToWritePerTick to the max amount of time you expect main
-    // loop will take until the next tick. If a tick exceeds this time audio
-    // will stutter as audio thread will fill the gap with silence
-    UINT32 minNumSamplesToWritePerTick = audio->bufferFormat->nSamplesPerSec / 10;
-    context.numSamplesToWrite = min(minNumSamplesToWritePerTick, numSamplesAvailable);
-
     // Initialise output buffer to 0 for mixing
     memset(context.outputSamples, 0, context.numSamplesToWrite * bytesPerSample);
 
