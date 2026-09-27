@@ -54,12 +54,6 @@ int main()
             break;
         }
 
-        if(spacePressed)
-        {
-            printf("tada!\n");
-            effect.pos = 0;
-        }
-
         {
             Win32AudioWriteContext writeContext = Win32AudioAcquireWriteContext(&audio);
             size_t numSamplesToWrite = writeContext.numSamplesToWrite;
@@ -68,6 +62,12 @@ int main()
             size_t playCount = writeContext.numSamplesPlayedSinceLastTick;
             SoundUpdate(&background, playCount);
             SoundUpdate(&effect, playCount);
+
+            if(spacePressed)
+            {
+                printf("tada!\n");
+                effect.pos = 0;
+            }
 
             // Mix sounds into output
             float* output = writeContext.outputSamples;
