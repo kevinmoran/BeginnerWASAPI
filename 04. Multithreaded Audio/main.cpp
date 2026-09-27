@@ -44,6 +44,7 @@ int main()
                     case VK_ESCAPE: escPressed = true; break;
                     case VK_SPACE: spacePressed = true; break;
                     case 'D': delayPressed = true; break;
+                    default: break;
                 }
             }
         }
